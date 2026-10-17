@@ -1,0 +1,603 @@
+// KHORAK — Prisma Database Schema
+// Supplementary Nutrition Supply Chain Tracker (ICDS Gujarat - PS000052)
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  AWW         // Anganwadi Worker (frontline)
+  AWH         // Anganwadi Helper (read-only frontline)
+  SUPERVISOR  // Mukhya Sevika (sector oversight: 25-30 AWCs)
+  CDPO        // Child Development Project Officer (block management: 75-150 AWCs)
+  DPO         // District Programme Officer (district analytics & audit)
+  SUPPLIER    // Food Supplier / GCMMFL / FPS / SHG
+}
+
+enum ItemCategory {
+  THR_PACKET        // Take-Home Ration packaged premix (Balshakti, Matrushakti, Purnashakti)
+  HCM_RAW_GRAIN     // Raw grains for hot meals (Wheat, Rice)
+  HCM_PULSE         // Pulses (Tuver Dal, Moong)
+  HCM_OIL           // Edible Fortified Oil
+  HCM_SPICE         // Salt, Turmeric, Spices
+  SUPPLEMENT        // IFA tablets, Vitamin A syrups, Micronutrient packets
+}
+
+enum UnitOfMeasure {
+  PACKET
+  KG
+  LITRE
+  GRAM
+}
+
+enum BeneficiaryCategory {
+  CHILD_0_TO_3      // 6 months to 3 years (THR Balshakti)
+  CHILD_3_TO_6      // 3 to 6 years (Hot Cooked Meals at AWC)
+  PREGNANT_WOMAN    // Matrushakti THR
+  LACTATING_MOTHER  // Matrushakti THR
+  ADOLESCENT_GIRL   // Purnashakti THR (14-18 years out-of-school)
+}
+
+enum DispatchStatus {
+  DRAFT
+  DISPATCHED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  EXCEPTION_FLAGGED
+  RESOLVED
+}
+
+enum ReceiptStatus {
+  CONFIRMED
+  HAS_DISCREPANCIES
+}
+
+enum StockEventType {
+  OPENING_BALANCE
+  RECEIPT_INTAKE
+  THR_DISTRIBUTION
+  HCM_CONSUMPTION
+  PHYSICAL_COUNT_ADJUSTMENT
+  APPROVED_WRITE_OFF
+  RETURN_TO_SUPPLIER
+}
+
+enum DiscrepancyType {
+  SHORT_DELIVERY
+  DAMAGED_DELIVERY
+  PHYSICAL_COUNT_VARIANCE
+  SUSPECTED_LEAKAGE
+  SPOILED_BATCH
+}
+
+enum DiscrepancyStatus {
+  OPEN
+  INVESTIGATING
+  RECOUNT_REQUESTED
+  APPROVED_ADJUSTED
+  REJECTED
+  RESOLVED
+}
+
+enum SeverityLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum WriteOffStatus {
+  PENDING_SUPERVISOR
+  PENDING_CDPO
+  APPROVED
+  REJECTED
+}
+
+enum PhysicalCountStatus {
+  MATCHED
+  PENDING_REVIEW
+  RECOUNT_REQUESTED
+  APPROVED
+  REJECTED
+}
+
+// -------------------------------------------------------------
+// Administrative Hierarchy
+// -------------------------------------------------------------
+
+model District {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  nameEn    String
+  nameGu    String
+  state     String   @default("Gujarat")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  blocks    Block[]
+}
+
+model Block {
+  id         String   @id @default(uuid())
+  code       String   @unique
+  nameEn     String
+  nameGu     String
+  districtId String
+  district   District @relation(fields: [districtId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  sectors    Sector[]
+  users      User[]
+}
+
+model Sector {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  nameEn    String
+  nameGu    String
+  blockId   String
+  block     Block    @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  awcs      AWC[]
+  users     User[]
+}
+
+model AWC {
+  id                        String              @id @default(uuid())
+  code                      String              @unique // Unique AWC Code (e.g. 24190101)
+  nameEn                    String
+  nameGu                    String
+  sectorId                  String
+  sector                    Sector              @relation(fields: [sectorId], references: [id], onDelete: Cascade)
+  address                   String?
+  contactPhone              String?
+  enrolledBeneficiariesCount Int                @default(0)
+  createdAt                 DateTime            @default(now())
+  updatedAt                 DateTime            @updatedAt
+
+  users                     User[]
+  beneficiaries             Beneficiary[]
+  dispatches                Dispatch[]
+  receipts                  Receipt[]
+  stockLedgerEvents         StockLedgerEvent[]
+  thrDistributions          THRDistribution[]
+  hcmServices               HCMDailyService[]
+  physicalCounts            PhysicalCount[]
+  discrepancies             Discrepancy[]
+  writeOffRequests          WriteOffRequest[]
+  alerts                    Alert[]
+  auditLogs                 AuditLog[]
+}
+
+// -------------------------------------------------------------
+// Authentication & Roles
+// -------------------------------------------------------------
+
+model User {
+  id                 String    @id @default(uuid())
+  username           String    @unique
+  passwordHash       String
+  fullNameEn         String
+  fullNameGu         String
+  role               Role
+  phone              String?
+  languagePreference String    @default("gu") // "gu" or "en"
+  active             Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  // Data isolation / scope assignments
+  awcId              String?
+  awc                AWC?      @relation(fields: [awcId], references: [id])
+  sectorId           String?
+  sector             Sector?   @relation(fields: [sectorId], references: [id])
+  blockId            String?
+  block              Block?    @relation(fields: [blockId], references: [id])
+  supplierId         String?
+  supplier           Supplier? @relation(fields: [supplierId], references: [id])
+
+  receipts           Receipt[]
+  thrDistributions   THRDistribution[]
+  hcmServices        HCMDailyService[]
+  auditLogs          AuditLog[]
+}
+
+// -------------------------------------------------------------
+// Suppliers & Master Catalog
+// -------------------------------------------------------------
+
+model Supplier {
+  id            String     @id @default(uuid())
+  code          String     @unique
+  nameEn        String
+  nameGu        String
+  supplierType  String     // GCMMFL, GSCSCL, FPS, SHG
+  contactPerson String?
+  phone         String?
+  address       String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  users         User[]
+  batches       Batch[]
+  dispatches    Dispatch[]
+}
+
+model Item {
+  id                    String        @id @default(uuid())
+  code                  String        @unique // e.g. "THR-BAL", "HCM-WHEAT"
+  nameEn                String
+  nameGu                String
+  category              ItemCategory
+  unit                  UnitOfMeasure
+  minStockThresholdDays Int           @default(7) // Alert if supply < 7 days
+  shelfLifeDays         Int           @default(120)
+  caloriesPerUnit       Float?
+  proteinGramsPerUnit   Float?
+  description           String?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  batches               Batch[]
+  dispatchItems         DispatchItem[]
+  receiptItems          ReceiptItem[]
+  stockLedgerEvents     StockLedgerEvent[]
+  thrDistributions      THRDistribution[]
+  hcmConsumptions       HCMIngredientConsumption[]
+  physicalCounts        PhysicalCount[]
+  discrepancies         Discrepancy[]
+  writeOffRequests      WriteOffRequest[]
+}
+
+model Batch {
+  id                String       @id @default(uuid())
+  itemId            String
+  item              Item         @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  batchNumber       String
+  manufacturingDate DateTime
+  expiryDate        DateTime
+  supplierId        String?
+  supplier          Supplier?    @relation(fields: [supplierId], references: [id])
+  createdAt         DateTime     @default(now())
+
+  dispatchItems     DispatchItem[]
+  receiptItems      ReceiptItem[]
+
+  @@unique([itemId, batchNumber])
+}
+
+// -------------------------------------------------------------
+// Supply Chain: Dispatch & Receipt Verification
+// -------------------------------------------------------------
+
+model Dispatch {
+  id                 String         @id @default(uuid())
+  dispatchNumber     String         @unique // e.g. "DSP-2026-001"
+  challanNumber      String         @unique // Delivery Challan
+  supplierId         String
+  supplier           Supplier       @relation(fields: [supplierId], references: [id])
+  destinationAwcId   String
+  destinationAwc     AWC            @relation(fields: [destinationAwcId], references: [id])
+  dispatchDate       DateTime       @default(now())
+  expectedDeliveryDate DateTime?
+  status             DispatchStatus @default(DISPATCHED)
+  vehicleNumber      String?
+  driverName         String?
+  driverPhone        String?
+  notes              String?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  items              DispatchItem[]
+  receipt            Receipt?
+}
+
+model DispatchItem {
+  id                 String        @id @default(uuid())
+  dispatchId         String
+  dispatch           Dispatch      @relation(fields: [dispatchId], references: [id], onDelete: Cascade)
+  itemId             String
+  item               Item          @relation(fields: [itemId], references: [id])
+  batchId            String?
+  batch              Batch?        @relation(fields: [batchId], references: [id])
+  batchNumber        String?
+  quantityDispatched Float
+  unit               UnitOfMeasure
+  expiryDate         DateTime?
+}
+
+model Receipt {
+  id                 String        @id @default(uuid())
+  receiptNumber      String        @unique // e.g. "RCP-2026-001"
+  dispatchId         String?       @unique // Optional if unscheduled delivery
+  dispatch           Dispatch?     @relation(fields: [dispatchId], references: [id])
+  awcId              String
+  awc                AWC           @relation(fields: [awcId], references: [id])
+  challanNumber      String
+  receivedDate       DateTime      @default(now())
+  receivedByUserId   String
+  receivedByUser     User          @relation(fields: [receivedByUserId], references: [id])
+  supervisorOtpVerified Boolean    @default(false)
+  photoUrl           String?       // Delivery / Challan photograph
+  status             ReceiptStatus @default(CONFIRMED)
+  notes              String?
+  clientOperationId  String?       @unique // Idempotency protection
+  createdAt          DateTime      @default(now())
+
+  items              ReceiptItem[]
+}
+
+model ReceiptItem {
+  id                 String        @id @default(uuid())
+  receiptId          String
+  receipt            Receipt       @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  itemId             String
+  item               Item          @relation(fields: [itemId], references: [id])
+  batchId            String?
+  batch              Batch?        @relation(fields: [batchId], references: [id])
+  batchNumber        String?
+  quantityExpected   Float
+  quantityAccepted   Float         // ONLY THIS enters usable stock ledger!
+  quantityDamaged    Float         @default(0) // Does NOT enter stock
+  quantityRejected   Float         @default(0) // Does NOT enter stock
+  quantityShort      Float         @default(0) // Missing from dispatch
+  unit               UnitOfMeasure
+  conditionStatus    String        @default("GOOD") // "GOOD", "DAMAGED_PACKETS", "MOISTURE", "EXPIRED"
+  notes              String?
+}
+
+// -------------------------------------------------------------
+// Stock Ledger (Transaction-Based & Append-Only)
+// -------------------------------------------------------------
+
+model StockLedgerEvent {
+  id                String         @id @default(uuid())
+  awcId             String
+  awc               AWC            @relation(fields: [awcId], references: [id])
+  itemId            String
+  item              Item           @relation(fields: [itemId], references: [id])
+  batchNumber       String?
+  eventType         StockEventType
+  quantityChange    Float          // Positive (intake/adjustment) or Negative (distribution/consumption/write-off)
+  balanceAfter      Float          // Running balance immediately after event
+  unit              UnitOfMeasure
+  referenceType     String         // "RECEIPT", "THR_DISTRIBUTION", "HCM_SERVICE", "PHYSICAL_COUNT", "WRITE_OFF"
+  referenceId       String?        // ID of the triggering record
+  actorUserId       String
+  clientOperationId String?        // Offline UUID for idempotency
+  clientCreatedAt   DateTime?      // When the frontline worker saved offline
+  serverCreatedAt   DateTime       @default(now())
+  reasonNote        String?
+
+  @@index([awcId, itemId, serverCreatedAt])
+}
+
+// -------------------------------------------------------------
+// Beneficiaries & THR Distribution (Separated from HCM)
+// -------------------------------------------------------------
+
+model Beneficiary {
+  id                  String              @id @default(uuid())
+  awcId               String
+  awc                 AWC                 @relation(fields: [awcId], references: [id], onDelete: Cascade)
+  hashedAadhaar       String              // SHA-256 hash only (Data minimization - no raw Aadhaar stored)
+  fullNameEn          String
+  fullNameGu          String
+  category            BeneficiaryCategory
+  guardianName        String?
+  dateOfBirth         DateTime
+  gender              String              // "FEMALE", "MALE", "OTHER"
+  active              Boolean             @default(true)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  thrDistributions    THRDistribution[]
+
+  @@index([awcId, category])
+}
+
+model THRDistribution {
+  id                 String        @id @default(uuid())
+  awcId              String
+  awc                AWC           @relation(fields: [awcId], references: [id])
+  distributionDate   DateTime      @default(now())
+  distributionCycle  String        // e.g. "OCT-2026", "NOV-2026"
+  beneficiaryId      String?
+  beneficiary        Beneficiary?  @relation(fields: [beneficiaryId], references: [id])
+  beneficiaryCategory BeneficiaryCategory
+  itemId             String
+  item               Item          @relation(fields: [itemId], references: [id])
+  batchNumber        String?
+  quantityDistributed Float        // Number of packets (e.g. 4 packets)
+  unit               UnitOfMeasure @default(PACKET)
+  acknowledgmentType String        // "SCREEN_SIGNATURE", "PHOTO", "ROSTER_CONFIRMATION"
+  signatureData      String?       // Base64 svg / canvas trace
+  photoUrl           String?
+  recordedByUserId   String
+  recordedByUser     User          @relation(fields: [recordedByUserId], references: [id])
+  clientOperationId  String?       @unique
+  isOfflineSync      Boolean       @default(false)
+  createdAt          DateTime      @default(now())
+}
+
+// -------------------------------------------------------------
+// Hot Cooked Meals (HCM) — Ingredients & Cooking Log
+// -------------------------------------------------------------
+
+model HCMDailyService {
+  id                 String                     @id @default(uuid())
+  awcId              String
+  awc                AWC                        @relation(fields: [awcId], references: [id])
+  serviceDate        DateTime                   @default(now())
+  enrolledChildren   Int                        @default(0) // Enrolled 3-6y children
+  attendanceCount    Int                        // Children physically present
+  mealsPreparedCount Int
+  mealsServedCount   Int
+  overReportFlag     Boolean                    @default(false) // Flagged if served > attendance * 1.05
+  menuDescription    String?                    // e.g. "Kichdi, Sukhdi, Milk"
+  recordedByUserId   String
+  recordedByUser     User                       @relation(fields: [recordedByUserId], references: [id])
+  clientOperationId  String?                    @unique
+  createdAt          DateTime                   @default(now())
+
+  consumptions       HCMIngredientConsumption[]
+}
+
+model HCMIngredientConsumption {
+  id                 String          @id @default(uuid())
+  hcmServiceId       String
+  hcmService         HCMDailyService @relation(fields: [hcmServiceId], references: [id], onDelete: Cascade)
+  itemId             String
+  item               Item            @relation(fields: [itemId], references: [id])
+  quantityUsed       Float           // e.g. 2.5 kg wheat, 0.5 kg dal, 0.25 L oil
+  unit               UnitOfMeasure
+}
+
+// -------------------------------------------------------------
+// Physical Stock Counts & Reconciliation
+// -------------------------------------------------------------
+
+model PhysicalCount {
+  id                 String              @id @default(uuid())
+  awcId              String
+  awc                AWC                 @relation(fields: [awcId], references: [id])
+  countDate          DateTime            @default(now())
+  itemId             String
+  item               Item                @relation(fields: [itemId], references: [id])
+  batchNumber        String?
+  computedBookBalance Float              // Authoritative book balance prior to count
+  actualPhysicalCount Float              // What AWW physically counted
+  variance           Float               // actual - computed (negative means shortage)
+  status             PhysicalCountStatus @default(PENDING_REVIEW)
+  reasonCode         String              // "MEASUREMENT_ERROR", "UNRECORDED_SPILLAGE", "UNLOGGED_DELIVERY", "SUSPECTED_PILFERAGE", "OTHER"
+  explanation        String?
+  conductedByUserId  String
+  reviewedByUserId   String?
+  reviewTimestamp    DateTime?
+  reviewNotes        String?
+  clientOperationId  String?             @unique
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+}
+
+// -------------------------------------------------------------
+// Discrepancy & Exception Handling
+// -------------------------------------------------------------
+
+model Discrepancy {
+  id                 String            @id @default(uuid())
+  caseNumber         String            @unique // e.g. "DSC-2026-001"
+  awcId              String
+  awc                AWC               @relation(fields: [awcId], references: [id])
+  itemId             String
+  item               Item              @relation(fields: [itemId], references: [id])
+  discrepancyType    DiscrepancyType
+  relatedEntityType  String            // "RECEIPT", "PHYSICAL_COUNT", "DISPATCH"
+  relatedEntityId    String
+  expectedQuantity   Float
+  actualQuantity     Float
+  varianceQuantity   Float             // Difference needing explanation
+  unit               UnitOfMeasure
+  severity           SeverityLevel     @default(MEDIUM)
+  status             DiscrepancyStatus @default(OPEN)
+  reportedByUserId   String
+  reviewedByUserId   String?
+  resolutionNotes    String?
+  resolutionTimestamp DateTime?
+  evidencePhotoUrl   String?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+}
+
+// -------------------------------------------------------------
+// Wastage / Spoilage / Write-Offs
+// -------------------------------------------------------------
+
+model WriteOffRequest {
+  id                  String         @id @default(uuid())
+  caseNumber          String         @unique // e.g. "WRO-2026-001"
+  awcId               String
+  awc                 AWC            @relation(fields: [awcId], references: [id])
+  itemId              String
+  item                Item           @relation(fields: [itemId], references: [id])
+  batchNumber         String?
+  quantity            Float
+  unit                UnitOfMeasure
+  reasonCode          String         // "RODENT_DAMAGE", "MOISTURE_SPOILAGE", "EXPIRED_STOCK", "QUALITY_ON_ARRIVAL", "TRANSIT_DAMAGE"
+  explanation         String?
+  voiceNoteTranscript String?        // Transcribed Gujarati voice note
+  photoUrl            String?        // Mandatory evidence photo
+  status              WriteOffStatus @default(PENDING_SUPERVISOR)
+  reportedByUserId    String
+  supervisorId        String?
+  cdpoId              String?
+  approvalNotes       String?
+  actionTimestamp     DateTime?
+  clientOperationId   String?        @unique
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+}
+
+// -------------------------------------------------------------
+// Alerts & Push Notifications
+// -------------------------------------------------------------
+
+model Alert {
+  id             String        @id @default(uuid())
+  recipientRole  Role
+  recipientUserId String?
+  awcId          String?
+  awc            AWC?          @relation(fields: [awcId], references: [id])
+  alertType      String        // "LOW_STOCK_RUNOUT", "UNACKNOWLEDGED_DELIVERY", "SHORT_DELIVERY", "UNRESOLVED_DISCREPANCY", "STALE_AWC_RECORDS", "OVERREPORTED_MEALS"
+  severity       SeverityLevel @default(MEDIUM)
+  titleEn        String
+  titleGu        String
+  messageEn      String
+  messageGu      String
+  isRead         Boolean       @default(false)
+  linkRoute      String?
+  createdAt      DateTime      @default(now())
+}
+
+// -------------------------------------------------------------
+// Audit Log (Immutable & Queryable for CAG Audits)
+// -------------------------------------------------------------
+
+model AuditLog {
+  id            String   @id @default(uuid())
+  actorUserId   String
+  actorUser     User     @relation(fields: [actorUserId], references: [id])
+  actorRole     Role
+  awcId         String?
+  awc           AWC?     @relation(fields: [awcId], references: [id])
+  entityType    String   // "DISPATCH", "RECEIPT", "STOCK_LEDGER", "THR_DISTRIBUTION", "HCM_SERVICE", "PHYSICAL_COUNT", "DISCREPANCY", "WRITE_OFF"
+  entityId      String
+  action        String   // "CREATE", "UPDATE", "APPROVE", "REJECT", "RECOUNT", "SYNC"
+  oldValueJson  String?  // Serialized before snapshot
+  newValueJson  String?  // Serialized after snapshot
+  reasonCode    String?
+  ipAddress     String?
+  userAgent     String?
+  timestamp     DateTime @default(now())
+
+  @@index([awcId, entityType, timestamp])
+}
+
+// -------------------------------------------------------------
+// Offline Synchronization & Idempotency Tracking
+// -------------------------------------------------------------
+
+model SyncLog {
+  id                String   @id @default(uuid())
+  clientOperationId String   @unique // Client UUID generated while offline
+  entityType        String
+  entityId          String?
+  status            String   // "PROCESSED", "DUPLICATE_IGNORED", "CONFLICT_FLAGGED"
+  receivedAt        DateTime @default(now())
+  detailsJson       String?
+}
