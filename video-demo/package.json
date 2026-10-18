@@ -1,0 +1,26 @@
+{
+  "name": "khorak-video-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Remotion Product Demo Video for KHORAK — SFIC 2026 PS000052",
+  "scripts": {
+    "start": "remotion preview src/index.ts",
+    "build": "remotion render src/index.ts KhorakDemo out/KHORAK_SFIC_2026_Demo.mp4 --gl=angle",
+    "render": "remotion render src/index.ts KhorakDemo out/KHORAK_SFIC_2026_Demo.mp4"
+  },
+  "dependencies": {
+    "lucide-react": "^0.475.0",
+    "puppeteer-core": "^25.14.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.230"
+  },
+  "devDependencies": {
+    "@remotion/bundler": "^4.0.230",
+    "@remotion/cli": "^4.0.230",
+    "@remotion/renderer": "^4.0.230",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "typescript": "^5.7.3"
+  }
+}
